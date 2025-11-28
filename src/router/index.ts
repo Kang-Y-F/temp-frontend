@@ -23,12 +23,42 @@
 // export default router
 import { createRouter, createWebHistory } from 'vue-router'
 import TemperatureView from '@/views/TemperatureView.vue'
+import CloudDashBoard from '@/views/CloudDashBoard.vue'
+import cloud2 from '@/views/cloud2.vue'
+import AdvancedAnalyticsDashboard from '@/views/AdvancedAnalyticsDashboard.vue'
+import Ad2 from '@/views/Ad2.vue'
+import Ad3 from '@/views/Ad3.vue'
 
 const routes = [
   {
     path: '/temperature',
     name: 'Temperature',
     component: TemperatureView
+  },
+  {
+    path: '/cloud2',
+    name: 'cloud2',
+    component: cloud2
+  },
+  {
+    path: '/clouddashboard',
+    name: 'CloudDashBoard',
+    component: CloudDashBoard
+  },
+  {
+    path: '/advanced',
+    name: 'AdvancedAnalyticsDashboard',
+    component: AdvancedAnalyticsDashboard
+  },
+  {
+    path: '/ad2',
+    name: 'Ad2',
+    component: Ad2
+  },
+  {
+    path: '/ad3',
+    name: 'Ad3',
+    component: Ad3
   }
 ]
 
