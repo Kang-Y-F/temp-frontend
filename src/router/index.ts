@@ -28,6 +28,7 @@ import cloud2 from '@/views/cloud2.vue'
 import AdvancedAnalyticsDashboard from '@/views/AdvancedAnalyticsDashboard.vue'
 import Ad2 from '@/views/Ad2.vue'
 import Ad3 from '@/views/Ad3.vue'
+import Dashboard from '@/views/Dashboard.vue'
 
 const routes = [
   {
@@ -59,6 +60,11 @@ const routes = [
     path: '/ad3',
     name: 'Ad3',
     component: Ad3
+  },
+  {
+    path: '/dashboard',
+    name: 'Dashboard',
+    component: Dashboard
   }
 ]
 

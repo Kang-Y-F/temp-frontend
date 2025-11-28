@@ -415,6 +415,16 @@
         </div>
       </div>
     </div>
+	<!-- 建议放在 <div class="dashboard"> 的直接子元素，方便全局悬浮 -->
+	<div class="voice-control-container">
+	  <button @click="toggleVoiceRecognition" class="voice-btn" :class="{ 'is-listening': isListening }">
+	    🎤
+	  </button>
+	  <div v-if="voiceStatus" class="voice-status-display">
+	    {{ voiceStatus }}
+	  </div>
+	</div>
+
   </div>
 </template>
 
@@ -437,6 +447,7 @@ export default {
         SENSOR_STATUS_SUMMARY: '/sensor-status-summary',
         DEVICE_SUMMARY: '/device/summary'
       }
+	  
     }
 
     // 响应式数据
@@ -473,6 +484,11 @@ export default {
       offlineCount: 0,
       totalCount: 0
     })
+	//语音交互
+	const isListening = ref(false); // 是否正在进行语音识别
+	const voiceStatus = ref(''); // 用于显示语音识别状态和结果的文本
+	const recognition = ref(null); // 存储语音识别实例
+	let voiceCommandSocket = null; // 用于语音指令的WebSocket连接
 
     // 暂停告警轮播
     const pauseAlertCarousel = () => {
@@ -1831,7 +1847,7 @@ export default {
       // 显示设备状态
       ctx.fillStyle = '#ffffff'
       ctx.font = `${12 * scale}px Arial`
-      const statusText = !device.isUploaded ? '离线' : device.alarmTriggered ? '告警' : '正常'
+      const statusText = !device.isUploaded ? '异常' : device.alarmTriggered ? '预警' : '正常'
       ctx.fillText(statusText, x, y + (device.radius + 35) * scale)
     }
 
@@ -3131,6 +3147,181 @@ export default {
       }
     }
 
+// --- 在 setup 函数内添加以下方法 ---
+
+// 初始化语音识别
+const initializeVoiceRecognition = () => {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    voiceStatus.value = '您的浏览器不支持语音识别。';
+    console.error('Speech Recognition API not supported in this browser.');
+    return;
+  }
+
+  recognition.value = new SpeechRecognition();
+  recognition.value.lang = 'zh-CN'; // 设置语言为中文
+  recognition.value.interimResults = false; // 不需要中间结果
+  recognition.value.continuous = false; // 单次识别
+
+  // 识别开始
+  recognition.value.onstart = () => {
+    isListening.value = true;
+    voiceStatus.value = '正在聆听...';
+    console.log('Voice recognition started.');
+  };
+
+  // 识别结束
+  recognition.value.onend = () => {
+    isListening.value = false;
+    if (voiceStatus.value === '正在聆听...') {
+        voiceStatus.value = ''; // 如果没有识别到结果，则清空状态
+    }
+    console.log('Voice recognition stopped.');
+  };
+
+  // 发生错误
+  recognition.value.onerror = (event) => {
+    isListening.value = false;
+    voiceStatus.value = `识别错误: ${event.error}`;
+    console.error('Speech recognition error', event);
+  };
+
+  // 识别到结果
+  recognition.value.onresult = (event) => {
+    const transcript = event.results[0][0].transcript.trim();
+    voiceStatus.value = `识别到: "${transcript}"，正在处理...`;
+    console.log('Transcript:', transcript);
+    // 将识别到的文本发送到后端
+    if (voiceCommandSocket && voiceCommandSocket.readyState === WebSocket.OPEN) {
+      voiceCommandSocket.send(transcript);
+    } else {
+      voiceStatus.value = '与后端服务连接断开。';
+      console.error('WebSocket is not open.');
+    }
+  };
+};
+
+// 切换语音识别的开关方法
+const toggleVoiceRecognition = () => {
+  if (!recognition.value) {
+    initializeVoiceRecognition();
+  }
+  if (isListening.value) {
+    recognition.value.stop();
+  } else {
+    recognition.value.start();
+  }
+};
+
+
+// 初始化与后端语音指令WebSocket的连接
+const initializeVoiceWebSocket = () => {
+  // 注意：这里的URL需要与后端WebSocket配置的路径一致
+  voiceCommandSocket = new WebSocket('ws://localhost:8080/ws/voice-command');
+
+  voiceCommandSocket.onopen = () => {
+    console.log('Voice command WebSocket connection established.');
+  };
+
+  voiceCommandSocket.onmessage = (event) => {
+    const command = JSON.parse(event.data);
+    console.log('Received command from backend:', command);
+    voiceStatus.value = `正在执行: ${command.action}...`;
+    executeCommand(command); // 执行指令
+    // 短暂显示后清空状态
+    setTimeout(() => { voiceStatus.value = '' }, 3000);
+  };
+
+  voiceCommandSocket.onclose = () => {
+    console.log('Voice command WebSocket connection closed. Reconnecting...');
+    // 实现断线重连
+    setTimeout(initializeVoiceWebSocket, 3000);
+  };
+
+  voiceCommandSocket.onerror = (error) => {
+    console.error('Voice command WebSocket error:', error);
+    voiceCommandSocket.close();
+  };
+};
+
+// 执行从后端接收到的指令
+const executeCommand = (command) => {
+  const { action, payload } = command;
+
+  switch (action) {
+    case 'SWITCH_FACTORY':
+      // 假设 payload.factoryName 是 '工厂A', '工厂B', '工厂C'
+      const factoryIndex = factoryNames.value.indexOf(payload.factoryName);
+      if (factoryIndex !== -1) {
+        currentFactoryIndex.value = factoryIndex;
+        updateFactoryScene();
+        voiceStatus.value = `已切换到 ${payload.factoryName}`;
+      } else {
+        voiceStatus.value = `未找到名为 ${payload.factoryName} 的工厂`;
+      }
+      break;
+
+    case 'SHOW_DEVICE_DETAILS':
+      // 假设 payload.deviceId 是设备ID
+	  autoCarouselEnabled.value = false; 
+      const deviceToShow = devices.value.find(d => d.deviceId.toUpperCase() === payload.deviceId.toUpperCase());
+      if (deviceToShow) {
+        selectedDevice.value = deviceToShow;
+        showDeviceDetailPanel(); // 调用已有的打开详情面板方法
+        voiceStatus.value = `已显示设备 ${payload.deviceId} 的详情`;
+      } else {
+        voiceStatus.value = `未找到设备 ${payload.deviceId}`;
+      }
+      break;
+
+      case 'FIND_HIGHEST_TEMP_DEVICE':
+	  autoCarouselEnabled.value = false; 
+        if (devices.value && devices.value.length > 0) {
+          // 筛选出在线设备再进行比较，这样更准确
+          const onlineDevs = devices.value.filter(d => d.isUploaded);
+          
+          if (onlineDevs.length > 0) {
+              // 使用 reduce 找到温度最高的设备对象
+              const highestTempDevice = onlineDevs.reduce((prev, current) => {
+                  return (prev.temperature > current.temperature) ? prev : current;
+              });
+
+              // 1. 更新选中设备
+              selectedDevice.value = highestTempDevice;
+              
+              // 2. 更新左侧列表的滚动位置，使其可见
+              updateDeviceScrollPosition(); 
+              
+              // 3. 在3D曲面图中高亮该设备
+              highlightSelectedDevice(); 
+              
+              // 4. 更新语音状态提示
+              voiceStatus.value = `温度最高的设备是 ${highestTempDevice.deviceId} (${highestTempDevice.temperature}°C)，正在显示详情...`;
+
+              // 5. **关键步骤：自动弹出详细信息面板！**
+              // 使用 setTimeout 稍微延迟一下，给用户一个反应时间，体验更好
+              setTimeout(() => {
+                showDeviceDetailPanel();
+              }, 1000); // 延迟1秒后弹出
+
+          } else {
+              voiceStatus.value = `当前没有在线的设备可供比较。`;
+          }
+        } else {
+            voiceStatus.value = `当前没有设备数据。`;
+        }
+        break;
+      
+    case 'COMMAND_NOT_RECOGNIZED':
+      voiceStatus.value = `无法理解指令: "${payload.originalText}"`;
+      break;
+
+    default:
+      console.warn('Unknown command action:', action);
+  }
+};
+
+
     // 生命周期
     onMounted(() => {
       updateTime()
@@ -3140,7 +3331,11 @@ export default {
       loadPositionsFromLocalStorage()
       // 初始化虚拟设备
       useMockDevicesOnly()
-      
+	  
+	console.log("Initializing voice recognition and WebSocket...");
+	initializeVoiceRecognition();
+	initializeVoiceWebSocket();
+	
       // 从后端获取设备数据（如果有后端连接）
 	  fetchDeviceData().then(() => {
 		// 设备数据加载完成后初始化3D场景
@@ -3241,6 +3436,15 @@ export default {
         sceneContainer.value.removeEventListener('mouseleave', hideDeviceTooltip)
       }
       
+	  // 关闭语音识别
+	  if (recognition.value) {
+		  recognition.value.stop();
+	  }
+	  // 关闭WebSocket连接
+	  if (voiceCommandSocket) {
+		  voiceCommandSocket.close();
+	  }
+	  
       window.removeEventListener('resize', handleResize)
     })
 
@@ -3313,7 +3517,11 @@ export default {
       hasPositionChanges,
       saveDevicePositions,
       pauseAlertCarousel,
-      resumeAlertCarousel
+      resumeAlertCarousel,
+	  voiceStatus: voiceStatus,            // 用于显示状态文本
+	  isListening: isListening,            // 用于控制按钮样式
+	  toggleVoiceRecognition: toggleVoiceRecognition // 用于按钮的 @click 事件
+	  
     }
   }
 }
@@ -4433,4 +4641,58 @@ display: none;
   outline: none;
   border-color: #4facfe;
 }
+
+/* 语音控制容器 */
+.voice-control-container {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.voice-btn {
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 50%;
+  background-color: #4facfe;
+  border: 2px solid #fff;
+  color: white;
+  font-size: 1.8rem;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  box-shadow: 0 0 15px rgba(79, 172, 254, 0.7);
+  transition: all 0.3s ease;
+}
+
+.voice-btn:hover {
+  background-color: #00f2fe;
+  transform: scale(1.1);
+}
+
+.voice-btn.is-listening {
+  background-color: #ff4d4d;
+  box-shadow: 0 0 20px rgba(255, 77, 77, 1);
+  animation: pulse-red 1.5s infinite;
+}
+
+@keyframes pulse-red {
+  0% { box-shadow: 0 0 10px rgba(255, 77, 77, 0.7); }
+  50% { box-shadow: 0 0 25px rgba(255, 77, 77, 1); }
+  100% { box-shadow: 0 0 10px rgba(255, 77, 77, 0.7); }
+}
+
+.voice-status-display {
+  background: rgba(16, 35, 70, 0.9);
+  padding: 0.5rem 1rem;
+  border-radius: 5px;
+  border: 1px solid #4facfe;
+  color: #a0c8ff;
+  font-size: 0.9rem;
+}
+
 </style>
