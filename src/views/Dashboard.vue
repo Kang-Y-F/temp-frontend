@@ -324,7 +324,7 @@
     <!-- 设备详情面板模态框 -->
     <div class="device-detail-modal" v-if="showDetailPanel">
       <div class="modal-overlay" @click="closeDeviceDetailPanel"></div>
-      <div class="modal-content">
+      <div class="modal-content" >
         <div class="modal-header">
           <h2>设备详情 - {{ selectedDevice ? selectedDevice.deviceId : '' }}</h2>
           <button class="close-btn" @click="closeDeviceDetailPanel">✕</button>
@@ -424,6 +424,81 @@
 	    {{ voiceStatus }}
 	  </div>
 	</div>
+	<div class="selection-panel" :class="{ show: showSelectionPanel }">
+	  <div class="panel-header">
+		<h3>圈选结果分析</h3>
+		<button class="close-btn" @click="closeSelectionPanel">✕</button>
+	  </div>
+	    <!-- 将 v-if="selectionStats" 修改为 v-if="selectionComputedStats" -->
+	    <div class="panel-body" v-if="selectionComputedStats">
+	      <div class="summary-title">
+	        <!-- 使用新的计算属性 -->
+	        已圈选 <strong>{{ selectionComputedStats.totalCount }}</strong> 台设备
+	      </div>
+	      
+	      <!-- 状态统计 -->
+	      <div class="stats-group">
+	        <h4>状态分布</h4>
+	        <div class="stat-item">
+	          <span class="label">正常</span>
+	          <span class="value normal">{{ selectionComputedStats.normalCount }}</span>
+	        </div>
+	        <div class="stat-item">
+	          <span class="label">预警</span>
+	          <span class="value warning">{{ selectionComputedStats.warningCount }}</span>
+	        </div>
+	        <div class="stat-item">
+	          <span class="label">异常</span>
+	          <span class="value danger">{{ selectionComputedStats.dangerCount }}</span>
+	        </div>
+	      </div>
+	  
+	      <!-- 核心指标 -->
+	      <div class="stats-group">
+	        <h4>核心温度指标</h4>
+	        <div class="stat-item">
+	          <span class="label">最高温度</span>
+	          <span class="value danger">
+	            {{ selectionComputedStats.maxTemp.temp }}°C 
+	            <small>({{ selectionComputedStats.maxTemp.deviceId }})</small>
+	          </span>
+	        </div>
+	        <div class="stat-item">
+	          <span class="label">最低温度</span>
+	          <span class="value normal">
+	            {{ selectionComputedStats.minTemp.temp }}°C 
+	            <small>({{ selectionComputedStats.minTemp.deviceId }})</small>
+	          </span>
+	        </div>
+	        <div class="stat-item">
+	          <span class="label">平均温度</span>
+	          <span class="value">{{ selectionComputedStats.avgTemp }}°C</span>
+	        </div>
+	      </div>
+	  
+	      <!-- 设备列表 -->
+	      <div class="device-list-container">
+	        <h4>设备列表</h4>
+	        <ul class="device-list">
+	          <li 
+	            v-for="device in selectionComputedStats.devices" 
+	            :key="device.deviceId"
+	            @click="highlightSelectedDeviceFromPanel(device)"
+	            :class="{ active: selectedDevice?.deviceId === device.deviceId }"
+	          >
+	            <span class="device-id">{{ device.deviceId }}</span>
+	            <span class="device-temp" :class="getTempClass(device.temperature)">
+	              {{ device.temperature }}°C
+	            </span>
+	          </li>
+	        </ul>
+	      </div>
+	    </div>
+
+	  <div class="panel-body no-selection" v-else>
+		请按住 Shift 键并在3D视图中圈选设备以进行分析。
+	  </div>
+	</div>
 
   </div>
 </template>
@@ -489,6 +564,12 @@ export default {
 	const voiceStatus = ref(''); // 用于显示语音识别状态和结果的文本
 	const recognition = ref(null); // 存储语音识别实例
 	let voiceCommandSocket = null; // 用于语音指令的WebSocket连接
+	//手势交互
+	const showSelectionPanel = ref(false); // 控制圈选面板的显示/隐藏
+	const selectionStats = ref(null);      // 存储圈选结果的统计数据
+	const isSelecting = ref(false); // 标记是否正在进行圈选
+	const selectionPath = ref([]); // 存储圈选路径的点
+
 
     // 暂停告警轮播
     const pauseAlertCarousel = () => {
@@ -1650,7 +1731,10 @@ export default {
 
 	// 3D可视化方法
     const init3DScene = () => {
-      if (!sceneContainer.value) return
+        if (!sceneContainer.value) {
+          console.error("3D场景容器 (sceneContainer) 不存在，无法初始化。");
+          return;
+        }
 
       // 清除现有画布
       const existingCanvas = sceneContainer.value.querySelector('canvas')
@@ -1717,11 +1801,24 @@ export default {
       })))
     }
 
-    const getDevice3DColor = (device) => {
-      if (!device.isUploaded) return '#ff4d4d' // 红色 - 异常（未上传）
-      if (device.alarmTriggered) return '#ffcc00' // 黄色 - 预警（触发告警）
-      return '#00ff9d' // 绿色 - 正常
-    }
+    // const getDevice3DColor = (device) => {
+    //   if (!device.isUploaded) return '#ff4d4d' // 红色 - 异常（未上传）
+    //   if (device.alarmTriggered) return '#ffcc00' // 黄色 - 预警（触发告警）
+    //   return '#00ff9d' // 绿色 - 正常
+    // }
+
+const getDevice3DColor = (device) => {
+  const temp = device.temperature;
+
+  // 使用与 getTempStatus 完全相同的温度阈值
+  if (temp >= 85) {
+    return '#ff4d4d'; // 红色 - 异常
+  }
+  if (temp >= 70) {
+    return '#ffcc00'; // 黄色 - 预警
+  }
+  return '#00ff9d'; // 绿色 - 正常
+};
 
     // 新增方法：更新3D场景设备数据
     const update3DSceneDevices = () => {
@@ -1782,6 +1879,25 @@ export default {
 	  })
 
 	  draw3DConnections(ctx, canvas)
+	  
+	    // --- 新增：绘制圈选路径 ---
+	    if (isSelecting.value && selectionPath.value.length > 1) {
+	      ctx.strokeStyle = "rgba(0, 242, 254, 0.8)";
+	      ctx.fillStyle = "rgba(0, 242, 254, 0.2)";
+	      ctx.lineWidth = 2;
+	      ctx.setLineDash([5, 5]); // 虚线效果
+	      
+	      ctx.beginPath();
+	      ctx.moveTo(selectionPath.value[0].x, selectionPath.value[0].y);
+	      for (let i = 1; i < selectionPath.value.length; i++) {
+	        ctx.lineTo(selectionPath.value[i].x, selectionPath.value[i].y);
+	      }
+	      ctx.closePath(); // 封闭路径形成多边形
+	      ctx.stroke();
+	      ctx.fill();
+	  
+	      ctx.setLineDash([]); // 恢复实线
+	    }
 	}
 
     const draw3DDevice = (ctx, device, canvas) => {
@@ -1847,7 +1963,8 @@ export default {
       // 显示设备状态
       ctx.fillStyle = '#ffffff'
       ctx.font = `${12 * scale}px Arial`
-      const statusText = !device.isUploaded ? '异常' : device.alarmTriggered ? '预警' : '正常'
+      // const statusText = !device.isUploaded ? '异常' : device.alarmTriggered ? '预警' : '正常'
+	  const statusText = getTempStatus(device.temperature);
       ctx.fillText(statusText, x, y + (device.radius + 35) * scale)
     }
 
@@ -2007,6 +2124,20 @@ export default {
     let dragOffsetY = 0
 
     const handle3DMouseDown = (event) => {
+		  // 检查是否按下了 Shift 键
+	  if (event.shiftKey) {
+		isSelecting.value = true;
+		selectionPath.value = []; // 清空旧路径
+		const rect = sceneContainer.value.getBoundingClientRect();
+		selectionPath.value.push({
+		  x: event.clientX - rect.left,
+		  y: event.clientY - rect.top,
+		});
+		// 阻止默认拖拽行为
+		isDragging = false;
+		draggedDevice = null;
+		return; // 开始圈选，直接返回
+	  }
       const rect = sceneContainer.value.getBoundingClientRect()
       const mouseX = event.clientX - rect.left
       const mouseY = event.clientY - rect.top
@@ -2057,6 +2188,15 @@ export default {
     }
 
     const handle3DMouseUp = () => {
+	  // 如果圈选刚刚结束
+	  if (isSelecting.value) {
+		isSelecting.value = false;
+		if (selectionPath.value.length > 2) {
+		  processSelection(); // 调用你已有的处理函数
+		}
+		selectionPath.value = []; // 清空路径
+		return; // 结束圈选，直接返回
+	  }
       if (isDragging && draggedDevice) {
         draggedDevice.isDragging = false
         
@@ -2068,6 +2208,15 @@ export default {
     }
 
     const handle3DMouseDrag = (event) => {
+	  // 如果正在圈选
+	  if (isSelecting.value) {
+		const rect = sceneContainer.value.getBoundingClientRect();
+		selectionPath.value.push({
+		  x: event.clientX - rect.left,
+		  y: event.clientY - rect.top,
+		});
+		return; // 更新圈选路径，直接返回
+	  }
       if (!isDragging || !draggedDevice) return
 
       const rect = sceneContainer.value.getBoundingClientRect()
@@ -2526,7 +2675,10 @@ export default {
     const highlightSelectedDevice = () => {
       if (surface3dChart.value && selectedDevice.value) {
         const option = surface3dChart.value.getOption()
-        
+		if (!option || !option.series || !option.series[1]) {
+		  console.warn("3D曲面图尚未完全初始化，无法高亮选中设备。");
+		  return; // 直接返回，不执行后续代码
+		}
         const deviceData = devices.value.map(device => {
           let color
           if (!device.isUploaded) {
@@ -2784,7 +2936,8 @@ export default {
               z: function (u, v) {
                 return 2 * Math.sin(u) * Math.cos(v)
               }
-            }
+            },
+			grid3DIndex: 0, 
           },
           {
             type: 'scatter3D',
@@ -2792,7 +2945,8 @@ export default {
             data: deviceData,
             itemStyle: {
               opacity: 0.8
-            }
+            },
+			grid3DIndex: 0,
           }
         ]
       }
@@ -3321,78 +3475,165 @@ const executeCommand = (command) => {
   }
 };
 
+// 在 setup() 内修改 processSelection 函数
+// 在 setup() 内找到并修改 processSelection 函数
+const processSelection = () => {
+  if (selectionPath.value.length < 3) return;
 
-    // 生命周期
-    onMounted(() => {
-      updateTime()
-      setInterval(updateTime, 1000)
-      
-      // 首先尝试从本地存储加载设备位置
-      loadPositionsFromLocalStorage()
-      // 初始化虚拟设备
-      useMockDevicesOnly()
-	  
-	console.log("Initializing voice recognition and WebSocket...");
-	initializeVoiceRecognition();
-	initializeVoiceWebSocket();
-	
-      // 从后端获取设备数据（如果有后端连接）
-	  fetchDeviceData().then(() => {
-		// 设备数据加载完成后初始化3D场景
-		nextTick(() => {
-		  setTimeout(() => {
-			initCharts()
-			init3DScene()
-			if (sceneContainer.value) {
-			  sceneContainer.value.addEventListener('mousedown', handle3DMouseDown)
-			  sceneContainer.value.addEventListener('mousemove', (e) => {
-				handle3DMouseMove(e)
-				handle3DMouseDrag(e)
-			  })
-			  sceneContainer.value.addEventListener('mouseup', handle3DMouseUp)
-			  sceneContainer.value.addEventListener('mouseleave', () => {
-				hideDeviceTooltip()
-				handle3DMouseUp()
-			  })
-			}
-		  }, 500)
-		})
-	  })
-      initAlerts() // 初始化告警数据
-      startDeviceCarousel()
-      startAlertCarousel()
-      
-	  // 获取设备状态统计
-	  fetchDeviceStatusSummary()
-	  
-      nextTick(() => {
-        setTimeout(() => {
-          initCharts()
-          init3DScene()
-          if (sceneContainer.value) {
-            sceneContainer.value.addEventListener('mousedown', handle3DMouseDown)
-            sceneContainer.value.addEventListener('mousemove', (e) => {
-              handle3DMouseMove(e)
-              handle3DMouseDrag(e)
-            })
-            sceneContainer.value.addEventListener('mouseup', handle3DMouseUp)
-            sceneContainer.value.addEventListener('mouseleave', () => {
-              hideDeviceTooltip()
-              handle3DMouseUp()
-            })
-          }
-        }, 500)
-      })
-      
-      setInterval(updateDeviceData, 3000)
-      setInterval(updateNetworkDelay, 5000)
-      // 设置定时更新设备状态统计（每5秒更新一次）
-      setInterval(fetchDeviceStatusSummary, 5000)
-	  
-      lastUpdate.value = new Date().toLocaleTimeString()
-      
-      window.addEventListener('resize', handleResize)
-    })
+  // 修改点：现在只存储 deviceId
+  const selectedDeviceIds = []; 
+  sceneObjects.forEach(device => {
+    const projected = project3DTo2D(device.position.x, device.position.y, device.position.z);
+    if (isPointInPolygon({ x: projected.x, y: projected.y }, selectionPath.value)) {
+      // 不再查找完整数据，只把 deviceId 推入数组
+      selectedDeviceIds.push(device.deviceId);
+    }
+  });
+  
+  if (selectedDeviceIds.length > 0) {
+    // 修改点：在 selectionStats 中只存储 deviceIds 列表
+    selectionStats.value = { deviceIds: selectedDeviceIds };
+    
+    if (!showSelectionPanel.value) {
+        showSelectionPanel.value = true;
+    }
+  } else {
+    // 如果没有圈选到设备，清空统计数据
+    selectionStats.value = null;
+  }
+};
+
+
+// 在 setup() 函数内添加
+const closeSelectionPanel = () => {
+  showSelectionPanel.value = false;
+  // 面板关闭后，可以取消高亮选中的设备
+  selectedDevice.value = null; // 这行是可选的
+};
+
+// 新增一个方法，用于处理从面板列表点击设备的行为
+const highlightSelectedDeviceFromPanel = (device) => {
+    selectedDevice.value = device;
+    highlightSelectedDevice(); // 调用你已有的高亮函数
+};
+// 可以放在 setup() 函数外部
+function isPointInPolygon(point, polygon) {
+  let inside = false;
+  const x = point.x, y = point.y;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x, yi = polygon[i].y;
+    const xj = polygon[j].x, yj = polygon[j].y;
+    const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+};
+// 在 setup() 内，找到 `selectionComputedStats` 的定义，替换为以下代码
+
+const selectionComputedStats = computed(() => {
+    // 1. 检查前提条件：如果没有圈选的ID，或者全局设备列表为空，则返回 null
+    if (!selectionStats.value || !selectionStats.value.deviceIds || selectionStats.value.deviceIds.length === 0 || devices.value.length === 0) {
+        return null;
+    }
+    
+    // 2. 关键：根据ID列表，从最新的、全局的 `devices.value` 中筛选出完整的设备对象
+    const selectedDevices = devices.value.filter(device => 
+        selectionStats.value.deviceIds.includes(device.deviceId)
+    );
+
+    // 3. 如果因为数据延迟等原因没找到设备，也返回 null
+    if (selectedDevices.length === 0) {
+        return null;
+    }
+
+    // 4. 基于筛选出的最新设备数据，进行所有统计计算
+    const totalCount = selectedDevices.length;
+    const normalCount = selectedDevices.filter(d => getTempStatus(d.temperature) === '正常').length;
+    const warningCount = selectedDevices.filter(d => getTempStatus(d.temperature) === '预警').length;
+    const dangerCount = selectedDevices.filter(d => getTempStatus(d.temperature) === '异常').length;
+
+    // 确保在计算最值前，数组不为空
+    const maxTempDevice = selectedDevices.reduce((max, d) => d.temperature > max.temperature ? d : max, selectedDevices[0]);
+    const minTempDevice = selectedDevices.reduce((min, d) => d.temperature < min.temperature ? d : min, selectedDevices[0]);
+    const avgTemp = (selectedDevices.reduce((sum, d) => sum + d.temperature, 0) / totalCount).toFixed(1);
+
+    // 5. 返回一个包含所有实时计算结果的对象
+    return {
+        totalCount,
+        normalCount,
+        warningCount,
+        dangerCount,
+        maxTemp: { temp: maxTempDevice.temperature, deviceId: maxTempDevice.deviceId },
+        minTemp: { temp: minTempDevice.temperature, deviceId: minTempDevice.deviceId },
+        avgTemp,
+        devices: selectedDevices, // 传递这个实时更新的设备列表给模板用于渲染
+    };
+});
+
+
+
+ // 在 <script> 的 setup() 函数中找到 onMounted
+ onMounted(() => {
+   console.log('Component is mounted. Starting initialization...');
+ 
+   // 1. 初始化基础UI和状态
+   updateTime();
+   setInterval(updateTime, 1000);
+   loadPositionsFromLocalStorage();
+   initializeVoiceRecognition();
+   initializeVoiceWebSocket();
+   initCharts(); // 先初始化图表结构
+ 
+   // 2. 核心数据加载流程
+   const loadInitialData = async () => {
+     try {
+       // 尝试从后端获取数据
+       await fetchDeviceData(); // fetchDeviceData 内部已经包含了失败后调用 useMockDevicesOnly 的逻辑
+       console.log('Initial data loaded successfully from backend or fallback to mock.');
+     } catch (error) {
+       console.error('An error occurred during initial data load:', error);
+       // 确保即使 fetchDeviceData 内部的 try-catch 失败，也有最后的保障
+       useMockDevicesOnly();
+     } finally {
+       // 3. 确保数据加载完成后，再初始化依赖数据的3D场景
+       nextTick(() => {
+         init3DScene();
+         if (sceneContainer.value) {
+           // 绑定事件监听
+           sceneContainer.value.addEventListener('mousedown', handle3DMouseDown);
+           sceneContainer.value.addEventListener('mousemove', (e) => {
+             handle3DMouseMove(e);
+             handle3DMouseDrag(e);
+           });
+           sceneContainer.value.addEventListener('mouseup', handle3DMouseUp);
+           sceneContainer.value.addEventListener('mouseleave', () => {
+             hideDeviceTooltip();
+             handle3DMouseUp();
+           });
+         }
+         console.log('3D scene initialized and event listeners attached.');
+       });
+ 
+       // 4. 初始化告警和轮播
+       initAlerts();
+       startDeviceCarousel();
+       startAlertCarousel();
+ 
+       // 5. 设置定时更新任务
+       setInterval(updateDeviceData, 6000); // 这个会调用 fetchDeviceData
+       setInterval(updateNetworkDelay, 5000);
+       setInterval(fetchDeviceStatusSummary, 5000);
+       
+       lastUpdate.value = new Date().toLocaleTimeString();
+     }
+   };
+ 
+   loadInitialData(); // 执行主加载流程
+ 
+   // 6. 监听窗口大小变化
+   window.addEventListener('resize', handleResize);
+ });
+
 
     onBeforeUnmount(() => {
       // 在页面卸载前保存位置
@@ -3520,8 +3761,12 @@ const executeCommand = (command) => {
       resumeAlertCarousel,
 	  voiceStatus: voiceStatus,            // 用于显示状态文本
 	  isListening: isListening,            // 用于控制按钮样式
-	  toggleVoiceRecognition: toggleVoiceRecognition // 用于按钮的 @click 事件
-	  
+	  toggleVoiceRecognition: toggleVoiceRecognition ,// 用于按钮的 @click 事件
+	showSelectionPanel,
+	selectionStats,
+	closeSelectionPanel,
+	highlightSelectedDeviceFromPanel,
+	selectionComputedStats, // 导出新的计算属性
     }
   }
 }
@@ -3906,8 +4151,8 @@ body {
 
 .dashboard {
   color: #ffffff !important;
-  width: 100vw;
-  height: 100vh;
+  width: 99vw;
+  height: 98vh;
   padding: 1rem;
   display: flex;
   flex-direction: column;
@@ -4694,5 +4939,161 @@ display: none;
   color: #a0c8ff;
   font-size: 0.9rem;
 }
+
+/* 圈选结果分析面板样式 */
+.selection-panel {
+  position: fixed;
+  top: 8rem; /* 调整到合适的位置 */
+  right: -320px; /* 默认隐藏在屏幕右侧 */
+  width: 300px;
+  height: calc(100vh - 10rem);
+  background: rgba(10, 26, 53, 0.95);
+  border-left: 2px solid #4facfe;
+  border-top-left-radius: 8px;
+  border-bottom-left-radius: 8px;
+  box-shadow: -5px 0 20px rgba(0, 100, 255, 0.2);
+  z-index: 900;
+  transition: right 0.5s ease-in-out;
+  display: flex;
+  flex-direction: column;
+}
+
+.selection-panel.show {
+  right: 0; /* 显示面板 */
+}
+
+.selection-panel .panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid rgba(79, 172, 254, 0.3);
+}
+
+.selection-panel .panel-header h3 {
+  margin: 0;
+  color: #4facfe;
+  font-size: 1rem;
+}
+
+.selection-panel .close-btn {
+  background: none;
+  border: none;
+  color: #a0c8ff;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0.2rem;
+  line-height: 1;
+}
+.selection-panel .close-btn:hover {
+  color: #ff4d4d;
+}
+
+.selection-panel .panel-body {
+  padding: 1rem;
+  overflow-y: auto;
+  flex-grow: 1;
+}
+
+.panel-body.no-selection {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #a0c8ff;
+  font-size: 0.9rem;
+}
+
+.summary-title {
+  font-size: 1.1rem;
+  color: #fff;
+  margin-bottom: 1.5rem;
+  text-align: center;
+}
+.summary-title strong {
+  color: #00f2fe;
+  font-size: 1.4rem;
+}
+
+.stats-group {
+  margin-bottom: 1.5rem;
+}
+.stats-group h4 {
+  color: #a0c8ff;
+  font-size: 0.9rem;
+  margin-bottom: 0.8rem;
+  border-bottom: 1px solid rgba(79, 172, 254, 0.2);
+  padding-bottom: 0.4rem;
+}
+
+.stats-group .stat-item {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+.stats-group .stat-item .label {
+  color: #a0c8ff;
+}
+.stats-group .stat-item .value {
+  color: #fff;
+  font-weight: bold;
+}
+.stats-group .stat-item .value.normal { color: #00ff9d; }
+.stats-group .stat-item .value.warning { color: #ffcc00; }
+.stats-group .stat-item .value.danger { color: #ff4d4d; }
+.stats-group .stat-item .value small {
+  font-size: 0.7rem;
+  color: #a0c8ff;
+  font-weight: normal;
+}
+
+.device-list-container h4 {
+  color: #a0c8ff;
+  font-size: 0.9rem;
+  margin-bottom: 0.8rem;
+  border-bottom: 1px solid rgba(79, 172, 254, 0.2);
+  padding-bottom: 0.4rem;
+}
+
+.device-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 200px; /* 设置一个最大高度，使其可滚动 */
+  overflow-y: auto;
+}
+/* 美化滚动条 */
+.device-list::-webkit-scrollbar { width: 4px; }
+.device-list::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+.device-list::-webkit-scrollbar-thumb { background: #4facfe; border-radius: 2px; }
+
+.device-list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem;
+  margin-bottom: 0.3rem;
+  background: rgba(16, 35, 70, 0.5);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.3s;
+  border-left: 3px solid transparent;
+}
+.device-list li:hover {
+  background: rgba(79, 172, 254, 0.2);
+}
+.device-list li.active {
+  background: rgba(79, 172, 254, 0.3);
+  border-left-color: #00f2fe;
+}
+.device-list .device-id {
+  font-size: 0.8rem;
+  color: #fff;
+}
+.device-list .device-temp {
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+
 
 </style>
